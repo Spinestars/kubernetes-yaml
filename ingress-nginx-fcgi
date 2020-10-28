@@ -1,0 +1,266 @@
+kind: Ingress
+apiVersion: networking.k8s.io/v1
+metadata:
+  name: doc-it-local-ingress
+  namespace: it
+  annotations:
+    kubernetes.io/ingress.class: "nginx"
+spec:
+  rules:
+  - host: doc.it.local
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: doc-it-local-nginx-svc
+            port:
+              number: 80
+---
+
+kind: Service
+apiVersion: v1
+metadata:
+  name: doc-it-local-nginx-svc
+  namespace: it
+spec:
+  selector:
+    app: doc-it-local-nginx-pod
+  ports:
+  - protocol: TCP
+    port: 80
+    targetPort: 80
+    name: doc-it-local-nginx-svc
+
+---
+
+kind: Deployment
+apiVersion: apps/v1
+metadata:
+  name: doc-it-local-nginx-dep
+  namespace: it
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: doc-it-local-nginx-pod
+  template:
+    metadata:
+      labels:
+        app: doc-it-local-nginx-pod
+    spec:
+      containers:
+      - name: doc-it-local-nginx-pod
+        image: nginx
+        ports:
+        - containerPort: 80
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "125m"
+          limits:
+            memory: "512Mi"
+            cpu: "250m"
+        volumeMounts:
+        - name: doc-it-local-vol
+          subPath: doc.it.local/data
+          mountPath: /app
+        - name: doc-it-local-vc
+          subPath: nginx.conf
+          mountPath: /etc/nginx/nginx.conf
+        - name: doc-it-local-vc
+          subPath: doc.it.local.conf
+          mountPath: /etc/nginx/conf.d/doc.it.local.conf
+        - name: doc-it-local-vc
+          subPath: fastcgi.conf
+          mountPath: /etc/nginx/fastcgi.conf
+      volumes:
+      - name: doc-it-local-vol
+        persistentVolumeClaim:
+          claimName: doc-it-local-pvc
+      - name: doc-it-local-vc
+        configMap:
+          name: doc-it-local-cm
+
+---
+
+kind: Service
+apiVersion: v1
+metadata:
+  name: doc-it-local-php-svc
+  namespace: it
+spec:
+  selector:
+    app: doc-it-local-php-pod
+  ports:
+  - protocol: TCP
+    port: 9000
+    targetPort: 9000
+    name: doc-it-local-php-svc
+
+---
+
+kind: Deployment
+apiVersion: apps/v1
+metadata:
+  name: doc-it-local-php-dep
+  namespace: it
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: doc-it-local-php-pod
+  template:
+    metadata:
+      labels:
+        app: doc-it-local-php-pod
+    spec:
+      containers:
+      - name: doc-it-local-php-pod
+        image: php:7.2-fpm
+        ports:
+        - containerPort: 9000
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "125m"
+          limits:
+            memory: "512Mi"
+            cpu: "250m"
+        volumeMounts:
+        - name: doc-it-local-vol
+          subPath: doc.it.local/data
+          mountPath: /app
+      volumes:
+      - name: doc-it-local-vol
+        persistentVolumeClaim:
+          claimName: doc-it-local-pvc
+
+---
+
+kind: ConfigMap
+apiVersion: v1
+metadata:
+  name: doc-it-local-cm
+  namespace: it
+data:
+  nginx.conf: |
+    user nginx;
+    worker_processes auto;
+    error_log /dev/stderr;
+    pid /run/nginx.pid;
+    include /usr/share/nginx/modules/*.conf;
+    events {
+        worker_connections 1024;
+    }
+    http {
+        log_format  main  '$remote_addr - $remote_user [$time_local] "$request" '
+                          '$status $body_bytes_sent "$http_referer" '
+                          '"$http_user_agent" "$http_x_forwarded_for"';
+        access_log  /dev/stdout  main;
+        sendfile            on;
+        tcp_nopush          on;
+        tcp_nodelay         on;
+        keepalive_timeout   65;
+        types_hash_max_size 2048;
+        include             /etc/nginx/mime.types;
+        default_type        application/octet-stream;
+        include /etc/nginx/conf.d/*.conf;
+    }
+  doc.it.local.conf: |
+    server
+        {
+            listen 80;
+            server_name doc.it.local;
+            index index.html index.php;
+            root /app;
+
+
+            location ~ [^/]\.php(/|$)
+            {
+                try_files $uri =404;
+                fastcgi_pass  doc-it-local-php-svc:9000;
+                fastcgi_index index.php;
+                include fastcgi.conf;
+            }
+
+            location ~ .*\.(gif|jpg|jpeg|png|bmp|swf)$
+            {
+                expires      30d;
+            }
+
+            location ~ .*\.(js|css)?$
+            {
+                expires      12h;
+            }
+
+            location ~ /.well-known {
+                allow all;
+            }
+
+            location ~ /\.
+            {
+                deny all;
+            }
+        }
+  fastcgi.conf: |
+    fastcgi_param  SCRIPT_FILENAME    $document_root$fastcgi_script_name;
+    fastcgi_param  QUERY_STRING       $query_string;
+    fastcgi_param  REQUEST_METHOD     $request_method;
+    fastcgi_param  CONTENT_TYPE       $content_type;
+    fastcgi_param  CONTENT_LENGTH     $content_length;
+
+    fastcgi_param  SCRIPT_NAME        $fastcgi_script_name;
+    fastcgi_param  REQUEST_URI        $request_uri;
+    fastcgi_param  DOCUMENT_URI       $document_uri;
+    fastcgi_param  DOCUMENT_ROOT      $document_root;
+    fastcgi_param  SERVER_PROTOCOL    $server_protocol;
+    fastcgi_param  REQUEST_SCHEME     $scheme;
+    fastcgi_param  HTTPS              $https if_not_empty;
+
+    fastcgi_param  GATEWAY_INTERFACE  CGI/1.1;
+    fastcgi_param  SERVER_SOFTWARE    nginx/$nginx_version;
+
+    fastcgi_param  REMOTE_ADDR        $remote_addr;
+    fastcgi_param  REMOTE_PORT        $remote_port;
+    fastcgi_param  SERVER_ADDR        $server_addr;
+    fastcgi_param  SERVER_PORT        $server_port;
+    fastcgi_param  SERVER_NAME        $server_name;
+
+    fastcgi_param  REDIRECT_STATUS    200;
+
+---
+
+kind: PersistentVolume
+apiVersion: v1
+metadata:
+  name:  doc-it-local-pv  # 定义 pv 名字, 会被 pvc 引用
+  namespace: it
+spec:
+  claimRef:
+    name: doc-it-local-pvc
+    namespace: it
+  capacity:
+    storage: 10Gi  # 定义大小
+  accessModes:
+  - ReadWriteMany   # 定义访问模式
+  persistentVolumeReclaimPolicy: Retain   # 定义pvc删除后的策略
+  nfs:
+    path: /mnt/data001/nfs-k8s   # 定义 nfs 共享路径
+    server: 10.200.16.250        # 定义 nfs 服务器地址
+
+---
+
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: doc-it-local-pvc
+  namespace: it
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 10Gi
+  volumeName: doc-it-local-pv
