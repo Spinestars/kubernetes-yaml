@@ -118,7 +118,7 @@ spec:
     spec:
       containers:
       - name: doc-it-local-php-pod
-        image: php:7.2-fpm
+        image: bitnami/php-fpm
         ports:
         - containerPort: 9000
         resources:
