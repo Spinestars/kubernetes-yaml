@@ -1,0 +1,203 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: nas-it-local-dep
+  namespace: it
+  labels:
+    app: nas-it-local
+spec:
+  serviceName: nas-it-local-vsftpd
+  revisionHistoryLimit: 10
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nas-it-local
+  template:
+    metadata:
+      labels:
+        app: nas-it-local
+    spec:
+      hostNetwork: true
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: kubernetes.io/hostname
+                operator: In
+                values:
+                - k8s01
+      containers:
+      - name: vsftp
+        image: fauria/vsftpd
+        ports:
+        - containerPort: 20
+        - containerPort: 21
+        env:
+        - name: LOG_STDOUT
+          value: STDOUT
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "125m"
+          limits:
+            memory: "512Mi"
+            cpu: "250m"
+        volumeMounts:
+        - name: nas-it-local-vol
+          subPath: nas.it.local/data
+          mountPath: /home/vsftpd
+        - name: nas-it-local-vc
+          subPath: vsftpd.conf
+          mountPath: /etc/vsftpd/vsftpd.conf
+          readOnly: true
+        - name: nas-it-local-vc
+          subPath: virtual_users.txt
+          mountPath: /etc/vsftpd/virtual_users.txt
+          readOnly: true
+        - name: nas-it-local-vc
+          subPath: admin
+          mountPath: /etc/vsftpd/virtual/admin
+          readOnly: true
+        - name: nas-it-local-vc
+          subPath: yuangong
+          mountPath: /etc/vsftpd/virtual/yuangong
+          readOnly: true
+      volumes:
+      - name: nas-it-local-vol
+        persistentVolumeClaim:
+          claimName: nas-it-local-pvc
+      - name: nas-it-local-vc
+        configMap:
+          name: nas-it-local-cm
+
+---
+
+kind: ConfigMap
+apiVersion: v1
+metadata:
+  name: nas-it-local-cm
+  namespace: it
+data:
+  vsftpd.conf: |
+    # Run in the foreground to keep the container running:
+    background=NO
+
+    # Allow anonymous FTP? (Beware - allowed by default if you comment this out).
+    anonymous_enable=NO
+
+    # Uncomment this to allow local users to log in.
+    local_enable=YES
+
+    ## Enable virtual users
+    guest_enable=YES
+
+    ## Virtual users will use the same permissions as anonymous
+    virtual_use_local_privs=YES
+
+    # Uncomment this to enable any form of FTP write command.
+    write_enable=YES
+
+    ## PAM file name
+    pam_service_name=vsftpd_virtual
+
+    ## Home Directory for virtual users
+    user_sub_token=$USER
+    local_root=/home/vsftpd/$USER
+    user_config_dir=/etc/vsftpd/virtual
+
+    # You may specify an explicit list of local users to chroot() to their home
+    # directory. If chroot_local_user is YES, then this list becomes a list of
+    # users to NOT chroot().
+    chroot_local_user=YES
+
+    # Workaround chroot check.
+    # See https://www.benscobie.com/fixing-500-oops-vsftpd-refusing-to-run-with-writable-root-inside-chroot/
+    # and http://serverfault.com/questions/362619/why-is-the-chroot-local-user-of-vsftpd-insecure
+    allow_writeable_chroot=YES
+
+    ## Hide ids from user
+    hide_ids=YES
+
+    ## Enable logging
+    xferlog_enable=YES
+    xferlog_file=/var/log/vsftpd/vsftpd.log
+
+    ## Enable active mode
+    port_enable=YES
+    connect_from_port_20=YES
+    ftp_data_port=20
+
+    ## Disable seccomp filter sanboxing
+    seccomp_sandbox=NO
+
+    ### Variables set at container runtime
+    pasv_address=10.200.16.10
+    pasv_max_port=21110
+    pasv_min_port=21100
+    pasv_addr_resolve=NO
+    pasv_enable=YES
+    file_open_mode=0666
+    local_umask=077
+    xferlog_std_format=NO
+    reverse_lookup_enable=YES
+    pasv_promiscuous=NO
+    port_promiscuous=NO
+  virtual_users.txt: |
+    admin
+    zyh103439
+    yuangong
+    yuangong
+    juweirw
+    jw#18800
+    juweiro
+    juweiro
+  admin: |
+    local_root=/home/vsftpd
+    anon_world_readable_only=NO
+    write_enable=YES
+    anon_mkdir_write_enable=YES
+    anon_upload_enable=YES
+    anon_other_write_enable=YES
+  yuangong: |
+    local_root=/home/vsftpd/yuangong
+    anon_world_readable_only=NO
+    write_enable=NO
+    anon_mkdir_write_enable=NO
+    anon_upload_enable=NO
+    anon_other_write_enable=NO
+
+---
+
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name:  nas-it-local-pv  # 定义 pv 名字, 会被 pvc 引用
+  namespace: it
+spec:
+  claimRef:
+    name: nas-it-local-pvc
+    namespace: it
+  capacity:
+    storage: 100Gi  # 定义大小
+  accessModes:
+  - ReadWriteMany   # 定义访问模式
+  persistentVolumeReclaimPolicy: Retain   # 定义pvc删除后的策略
+  nfs:
+    path: /mnt/data001/nfs-k8s   # 定义 nfs 共享路径
+    server: 10.200.16.250        # 定义 nfs 服务器地址
+
+---
+
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: nas-it-local-pvc
+  namespace: it
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 100Gi
+  volumeName: nas-it-local-pv
